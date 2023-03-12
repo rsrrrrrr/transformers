@@ -1,200 +1,47 @@
+# Use the latest 2.1 version of CircleCI pipeline process engine.
+# See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
-setup: true
+
+# Orbs are reusable packages of CircleCI configuration that you may share across projects, enabling you to create encapsulated, parameterized commands, jobs, and executors that can be used across multiple projects.
+# See: https://circleci.com/docs/2.0/orb-intro/
 orbs:
-    continuation: circleci/continuation@0.1.0
+  # The python orb contains a set of prepackaged CircleCI configuration you can use repeatedly in your configuration files
+  # Orb commands and jobs help you with common scripting around a language/tool
+  # so you dont have to copy and paste it everywhere.
+  # See the orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
+  python: circleci/python@1.5.0
 
-parameters:
-    nightly:
-        type: boolean
-        default: false
-
+# Define a job to be invoked later in a workflow.
+# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
-    # Ensure running with CircleCI/huggingface
-    check_circleci_user:
-        docker:
-            - image: cimg/python:3.7.12
-        parallelism: 1
-        steps:
-            - run: echo $CIRCLE_PROJECT_USERNAME
-            - run: |
-                if [ "$CIRCLE_PROJECT_USERNAME" = "huggingface" ]; then
-                    exit 0
-                else
-                    echo "The CI is running under $CIRCLE_PROJECT_USERNAME personal account. Please follow https://support.circleci.com/hc/en-us/articles/360008097173-Troubleshooting-why-pull-requests-are-not-triggering-jobs-on-my-organization- to fix it."; exit -1
-                fi
-    # Fetch the tests to run
-    fetch_tests:
-        working_directory: ~/transformers
-        docker:
-            - image: cimg/python:3.7.12
-        parallelism: 1
-        steps:
-            - checkout
-            - run: pip install --upgrade pip
-            - run: pip install GitPython
-            - run: pip install .
-            - run: mkdir -p test_preparation
-            - run: python utils/tests_fetcher.py | tee tests_fetched_summary.txt
-            - store_artifacts:
-                  path: ~/transformers/tests_fetched_summary.txt
-            - run: |
-                if [ -f test_list.txt ]; then
-                    cp test_list.txt test_preparation/test_list.txt
-                else
-                    touch test_preparation/test_list.txt
-                fi
-            - run: |
-                if [ -f test_repo_utils.txt ]; then
-                    mv test_repo_utils.txt test_preparation/test_repo_utils.txt
-                else
-                    touch test_preparation/test_repo_utils.txt
-                fi
-            - run: python utils/tests_fetcher.py --filter_tests
-            - run: |
-                if [ -f test_list.txt ]; then
-                    mv test_list.txt test_preparation/filtered_test_list.txt
-                else
-                    touch test_preparation/filtered_test_list.txt
-                fi
-            - run: python utils/tests_fetcher.py --filters tests examples | tee examples_tests_fetched_summary.txt
-            - run: |
-                  if [ -f test_list.txt ]; then
-                      mv test_list.txt test_preparation/examples_test_list.txt
-                  else
-                      touch test_preparation/examples_test_list.txt
-                  fi
-            - store_artifacts:
-                  path: test_preparation/test_list.txt
-            - store_artifacts:
-                  path: ~/transformers/test_preparation/filtered_test_list.txt
-            - store_artifacts:
-                  path: test_preparation/examples_test_list.txt
-            - run: python .circleci/create_circleci_config.py --fetcher_folder test_preparation
-            - run: |
-                  if [ ! -s test_preparation/generated_config.yml ]; then
-                      echo "No tests to run, exiting early!"
-                      circleci-agent step halt
-                  fi
-            - run: cp test_preparation/generated_config.yml test_preparation/generated_config.txt
-            - store_artifacts:
-                  path: test_preparation/generated_config.txt
-            - continuation/continue:
-                  configuration_path: test_preparation/generated_config.yml
+  build-and-test: # This is the name of the job, feel free to change it to better match what you're trying to do!
+    # These next lines defines a Docker executors: https://circleci.com/docs/2.0/executor-types/
+    # You can specify an image from Dockerhub or use one of the convenience images from CircleCI's Developer Hub
+    # A list of available CircleCI Docker convenience images are available here: https://circleci.com/developer/images/image/cimg/python
+    # The executor is the environment in which the steps below will be executed - below will use a python 3.10.2 container
+    # Change the version below to your required version of python
+    docker:
+      - image: cimg/python:3.10.2
+    # Checkout the code as the first step. This is a dedicated CircleCI step.
+    # The python orb's install-packages step will install the dependencies from a Pipfile via Pipenv by default.
+    # Here we're making sure we use just use the system-wide pip. By default it uses the project root's requirements.txt.
+    # Then run your tests!
+    # CircleCI will report the results back to your VCS provider.
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: pip
+          # app-dir: ~/project/package-directory/  # If you're requirements.txt isn't in the root directory.
+          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
+      - run:
+          name: Run tests
+          # This assumes pytest is installed via the install-package step above
+          command: pytest
 
-    # To run all tests for the nightly build
-    fetch_all_tests:
-        working_directory: ~/transformers
-        docker:
-            - image: cimg/python:3.7.12
-        parallelism: 1
-        steps:
-            - checkout
-            - run: pip install --upgrade pip
-            - run: pip install GitPython
-            - run: pip install .
-            - run: |
-                  mkdir test_preparation
-                  echo -n "tests" > test_preparation/test_list.txt
-                  echo -n "tests" > test_preparation/examples_test_list.txt
-                  echo -n "tests/repo_utils" > test_preparation/test_repo_utils.txt
-            - run: |
-                  echo -n "tests" > test_list.txt
-                  python utils/tests_fetcher.py --filter_tests
-                  mv test_list.txt test_preparation/filtered_test_list.txt
-            - run: python .circleci/create_circleci_config.py --fetcher_folder test_preparation
-            - run: cp test_preparation/generated_config.yml test_preparation/generated_config.txt
-            - store_artifacts:
-                  path: test_preparation/generated_config.txt
-            - continuation/continue:
-                  configuration_path: test_preparation/generated_config.yml
-
-    check_code_quality:
-        working_directory: ~/transformers
-        docker:
-            - image: cimg/python:3.7.12
-        resource_class: large
-        environment:
-            TRANSFORMERS_IS_CI: yes
-            PYTEST_TIMEOUT: 120
-        parallelism: 1
-        steps:
-            - checkout
-            - restore_cache:
-                  keys:
-                      - v0.5-code_quality-{{ checksum "setup.py" }}
-                      - v0.5-code-quality
-            - run: pip install --upgrade pip
-            - run: pip install .[all,quality]
-            - save_cache:
-                  key: v0.5-code_quality-{{ checksum "setup.py" }}
-                  paths:
-                      - '~/.cache/pip'
-            - run:
-                name: Show installed libraries and their versions
-                command: pip freeze | tee installed.txt
-            - store_artifacts:
-                  path: ~/transformers/installed.txt
-            - run: black --check examples tests src utils
-            - run: ruff examples tests src utils
-            - run: python utils/custom_init_isort.py --check_only
-            - run: python utils/sort_auto_mappings.py --check_only
-            - run: doc-builder style src/transformers docs/source --max_len 119 --check_only --path_to_docs docs/source
-            - run: python utils/check_doc_toc.py
-
-    check_repository_consistency:
-        working_directory: ~/transformers
-        docker:
-            - image: cimg/python:3.7.12
-        resource_class: large
-        environment:
-            TRANSFORMERS_IS_CI: yes
-            PYTEST_TIMEOUT: 120
-        parallelism: 1
-        steps:
-            - checkout
-            - restore_cache:
-                  keys:
-                      - v0.5-repository_consistency-{{ checksum "setup.py" }}
-                      - v0.5-repository_consistency
-            - run: pip install --upgrade pip
-            - run: pip install .[all,quality]
-            - save_cache:
-                  key: v0.5-repository_consistency-{{ checksum "setup.py" }}
-                  paths:
-                      - '~/.cache/pip'
-            - run:
-                name: Show installed libraries and their versions
-                command: pip freeze | tee installed.txt
-            - store_artifacts:
-                  path: ~/transformers/installed.txt
-            - run: python utils/check_copies.py
-            - run: python utils/check_table.py
-            - run: python utils/check_dummies.py
-            - run: python utils/check_repo.py
-            - run: python utils/check_inits.py
-            - run: python utils/check_config_docstrings.py
-            - run: python utils/check_config_attributes.py
-            - run: python utils/check_doctest_list.py
-            - run: make deps_table_check_updated
-            - run: python utils/tests_fetcher.py --sanity_check
-            - run: python utils/update_metadata.py --check-only
-            - run: python utils/check_task_guides.py
-
+# Invoke jobs via workflows
+# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
-    version: 2
-    setup_and_quality:
-        when:
-            not: <<pipeline.parameters.nightly>>
-        jobs:
-            - check_circleci_user
-            - check_code_quality
-            - check_repository_consistency
-            - fetch_tests
-
-    nightly:
-        when: <<pipeline.parameters.nightly>>
-        jobs:
-            - check_circleci_user
-            - check_code_quality
-            - check_repository_consistency
-            - fetch_all_tests
+  sample: # This is the name of the workflow, feel free to change it to better match your workflow.
+    # Inside the workflow, you define the jobs you want to run.
+    jobs:
+      - build-and-test
